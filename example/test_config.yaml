@@ -1,0 +1,47 @@
+# Simple test configuration to verify the runner works
+
+compilers:
+  - api_name: cg152
+    display_name: GCC 15.2
+    nickname: gcc
+
+  - api_name: cclang2110
+    display_name: Clang 21.1
+    nickname: clang
+
+  - api_name: cg346
+    display_name: GCC 3.4.6
+    nickname: gcc3
+    local_asm: true
+
+  - api_name: sdcc450
+    display_name: SDCC 4.5.0
+    nickname: sdcc
+    local_compile: true
+
+tests:
+  - group: feature
+    detect_macro: FEATURE_IMPL
+    file_name: test_simple.c
+    # Additional files to include with this test group (e.g., headers)
+    additional_files:
+      - feature_config.h
+    # Or use include_dirs to include all files from a directory:
+    # include_dirs:
+    #   - ./headers
+    variants:
+      - variant: auto
+        auto: true
+        include_in_table: false
+
+      - variant: modern
+        display_name: Modern
+        detect_value: 1
+        prepend_lines:
+          - "#define FORCE_MODERN 1"
+
+      - variant: fallback
+        display_name: Fallback
+        detect_value: 2
+        prepend_lines:
+          - "#define FORCE_FALLBACK 1"
