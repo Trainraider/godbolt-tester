@@ -714,6 +714,22 @@ class GodboltProject:
     # -------------------------------------------------------------------------
     # Compiler messages (warnings/errors)
     # -------------------------------------------------------------------------
+
+    def _get_compiler_streams(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Return (stderr, stdout) lists for compiler diagnostics.
+
+        For execute() responses, compiler output lives under buildResult.* while
+        top-level stdout/stderr are the program output. For preprocess/compile-only
+        calls, diagnostics are at the top level.
+        """
+        if not self._last_response:
+            return ([], [])
+
+        build = self._last_response.get("buildResult")
+        if build and ("stderr" in build or "stdout" in build):
+            return build.get("stderr", []) or [], build.get("stdout", []) or []
+
+        return self._last_response.get("stderr", []) or [], self._last_response.get("stdout", []) or []
     
     def get_compiler_messages(self) -> Result[List[Dict[str, Any]]]:
         """
@@ -724,9 +740,9 @@ class GodboltProject:
         """
         if not self._last_response:
             return Err("No response available")
-        
-        stderr_lines = self._last_response.get("stderr", [])
-        return Ok(stderr_lines)
+
+        stderr_lines, stdout_lines = self._get_compiler_streams()
+        return Ok((stderr_lines or []) + (stdout_lines or []))
 
     @property
     def compiler_messages(self) -> List[Dict[str, Any]]:
@@ -742,12 +758,13 @@ class GodboltProject:
         """
         if not self._last_response:
             return Err("No response available")
-        
-        stderr_lines = self._last_response.get("stderr", [])
-        if not stderr_lines:
+
+        stderr_lines, stdout_lines = self._get_compiler_streams()
+        lines = stderr_lines if stderr_lines else stdout_lines
+        if not lines:
             return Ok("")
-        
-        text = "\n".join(line.get("text", "") for line in stderr_lines if "text" in line)
+
+        text = "\n".join(line.get("text", "") for line in lines if "text" in line)
         return Ok(text)
 
     @property
@@ -769,10 +786,16 @@ class GodboltProject:
         
         Heuristic: looks for 'warning' in stderr output.
         """
-        stderr = self.compiler_stderr
-        if not stderr:
+        stderr_lines, stdout_lines = self._get_compiler_streams()
+        text_chunks = []
+        for lines in (stderr_lines, stdout_lines):
+            if lines:
+                text_chunks.append("\n".join(line.get("text", "") for line in lines if "text" in line))
+
+        if not text_chunks:
             return False
-        return bool(re.search(r'\bwarning\b', stderr, re.IGNORECASE))
+
+        return bool(re.search(r'\bwarning\b', "\n".join(text_chunks), re.IGNORECASE))
 
     def get_error_count(self) -> int:
         """

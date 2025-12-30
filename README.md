@@ -16,7 +16,7 @@ Godbolt is very generous with his rate limit on his *free* api. Please consider 
 ## Quick start
 ```bash
 pip install -r requirements.txt
-python runner.py example/test_config.yaml --T
+python runner.py example/test_config.yaml -T
 ```
 Outputs go to `results/` (directory is replaced each run).
 

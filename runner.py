@@ -432,6 +432,7 @@ def run_test(
         files["debug_response"] = os.path.join(subdir, "debug_response.json")
     
     stderr_log: Dict[str, str] = {"preprocess": "", "compile": "", "run": ""}
+    warnings_detected = False
     
     # Read source file
     try:
@@ -497,11 +498,12 @@ def run_test(
     
     # Check for preprocessing errors
     stderr_log["preprocess"] = project.compiler_stderr
+    warnings_detected = project.has_warnings()
     if project.has_errors():
         _write_file(files["preprocess_err"], project.compiler_stderr)
         return _make_error_result(
             test, compiler, "preprocessing", files, stderr_log,
-            has_warnings=project.has_warnings(), has_errors=True
+            has_warnings=warnings_detected, has_errors=True
         )
     
     # Get preprocessed output
@@ -510,7 +512,7 @@ def run_test(
         _write_file(files["preprocess_err"], "No preprocessed output")
         return _make_error_result(
             test, compiler, "preprocessing", files, stderr_log,
-            has_warnings=project.has_warnings()
+            has_warnings=warnings_detected
         )
     
     # Save preprocessed source
@@ -540,7 +542,7 @@ def run_test(
             _write_file(files["compile_err"], compile_result.error)
             return _make_result(
                 test, compiler, "compilation", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings(), api_error=True
+                impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings(), api_error=True
             )
         
         # Check for compilation errors
@@ -549,13 +551,14 @@ def run_test(
             _write_file(files["compile_err"], project.compiler_stderr)
             return _make_result(
                 test, compiler, "compilation", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings(), has_errors=True
+                impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings(), has_errors=True
             )
         
         # Save assembly output
         assembly = project.assembly or ""
         files["assembly"] = os.path.join(os.path.dirname(files["preprocessed"]), "output.s")
         _write_file(files["assembly"], assembly)
+        warnings_detected = warnings_detected or project.has_warnings()
         
         # Assemble and run locally
         exec_result = project.compile_and_run_asm_locally(
@@ -570,7 +573,7 @@ def run_test(
             _write_file(files["compile_err"], exec_result.error)
             return _make_result(
                 test, compiler, "compilation", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings()
+                impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings()
             )
         
         local_result = exec_result.value
@@ -581,16 +584,17 @@ def run_test(
         _write_file(files["run_stdout"], stdout)
         _write_file(files["run_stderr"], stderr)
         stderr_log["run"] = stderr
+        warnings_detected = warnings_detected or project.has_warnings() or bool(stderr)
         
         if returncode != 0:
             return _make_result(
                 test, compiler, "runtime", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+                impl_value=impl_value, has_warnings=warnings_detected
             )
         
         return _make_result(
             test, compiler, "success", True, files, stderr_log,
-            impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+            impl_value=impl_value, has_warnings=warnings_detected
         )
     
     elif compiler.local_compile:
@@ -605,7 +609,7 @@ def run_test(
             _write_file(files["compile_err"], exec_result.error)
             return _make_result(
                 test, compiler, "compilation", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings()
+                impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings()
             )
         
         local_result = exec_result.value
@@ -616,16 +620,17 @@ def run_test(
         _write_file(files["run_stdout"], stdout)
         _write_file(files["run_stderr"], stderr)
         stderr_log["run"] = stderr
+        warnings_detected = warnings_detected or project.has_warnings() or bool(stderr)
         
         if returncode != 0:
             return _make_result(
                 test, compiler, "runtime", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+                impl_value=impl_value, has_warnings=warnings_detected
             )
         
         return _make_result(
             test, compiler, "success", True, files, stderr_log,
-            impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+            impl_value=impl_value, has_warnings=warnings_detected
         )
     
     else:
@@ -638,7 +643,7 @@ def run_test(
             _write_file(files["compile_err"], exec_result.error)
             return _make_result(
                 test, compiler, "compilation", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings(), api_error=True
+                impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings(), api_error=True
             )
         
         # Check if execution actually happened
@@ -648,7 +653,7 @@ def run_test(
                 _write_file(files["compile_err"], project.compiler_stderr)
                 return _make_result(
                     test, compiler, "compilation", False, files, stderr_log,
-                    impl_value=impl_value, has_warnings=project.has_warnings(), has_errors=True
+                    impl_value=impl_value, has_warnings=warnings_detected or project.has_warnings(), has_errors=True
                 )
         
         stdout = project.stdout or ""
@@ -658,16 +663,17 @@ def run_test(
         _write_file(files["run_stdout"], stdout)
         _write_file(files["run_stderr"], stderr)
         stderr_log["run"] = stderr
+        warnings_detected = warnings_detected or project.has_warnings() or bool(stderr)
         
         if exit_code != 0:
             return _make_result(
                 test, compiler, "runtime", False, files, stderr_log,
-                impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+                impl_value=impl_value, has_warnings=warnings_detected
             )
         
         return _make_result(
             test, compiler, "success", True, files, stderr_log,
-            impl_value=impl_value, has_warnings=project.has_warnings() or bool(stderr)
+            impl_value=impl_value, has_warnings=warnings_detected
         )
 
 
