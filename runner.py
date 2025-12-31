@@ -132,7 +132,9 @@ class TestVariant:
     detect_value: Optional[int] = None
     is_auto: bool = False
     include_in_table: bool = True
-    additional_files: List[str] = field(default_factory=list)  # Additional files (e.g., headers)
+    # Additional files as (godbolt_name, absolute_path) tuples
+    # godbolt_name is the original relative path from YAML, used as filename in Godbolt API
+    additional_files: List[Tuple[str, str]] = field(default_factory=list)
     include_dirs: List[str] = field(default_factory=list)  # Directories to include all files from
 
     @classmethod
@@ -186,7 +188,10 @@ class TestVariant:
             return result
         
         prepend_lines = merge_lists("prepend_lines")
-        additional_files = merge_lists("additional_files")
+        # additional_files: store as (godbolt_name, path) tuples
+        # Initially both are the original relative path; resolve_file_paths updates the absolute path
+        additional_files_raw = merge_lists("additional_files")
+        additional_files = [(f, f) for f in additional_files_raw]
         include_dirs = merge_lists("include_dirs")
         
         return cls(
@@ -316,19 +321,26 @@ def parse_tests(config: Dict[str, Any]) -> List[TestVariant]:
     return tests
 
 
-def resolve_file_paths(tests: List[TestVariant], config_dir: str) -> None:
-    """Resolve relative file paths in tests to absolute paths."""
+def resolve_file_paths(tests: List[TestVariant], base_dir: str) -> None:
+    """Resolve relative file paths in tests to absolute paths.
+
+    Paths are resolved against the current working directory (where the
+    runner is invoked).
+    
+    For additional_files, preserves the godbolt_name (original relative path)
+    while resolving the filesystem path to an absolute path.
+    """
     for test in tests:
         if not os.path.isabs(test.file_name):
-            test.file_name = os.path.abspath(os.path.join(config_dir, test.file_name))
-        # Resolve additional files
+            test.file_name = os.path.abspath(os.path.join(base_dir, test.file_name))
+        # Resolve additional files: (godbolt_name, path) -> (godbolt_name, absolute_path)
         test.additional_files = [
-            f if os.path.isabs(f) else os.path.abspath(os.path.join(config_dir, f))
-            for f in test.additional_files
+            (godbolt_name, path if os.path.isabs(path) else os.path.abspath(os.path.join(base_dir, path)))
+            for godbolt_name, path in test.additional_files
         ]
         # Resolve include directories
         test.include_dirs = [
-            d if os.path.isabs(d) else os.path.abspath(os.path.join(config_dir, d))
+            d if os.path.isabs(d) else os.path.abspath(os.path.join(base_dir, d))
             for d in test.include_dirs
         ]
 
@@ -338,7 +350,7 @@ def load_test_files(test: TestVariant) -> List[Tuple[str, str]]:
     Load additional files for a test (e.g., headers).
     
     Loads files from:
-      - additional_files: Explicit file paths
+      - additional_files: Explicit file paths (with preserved godbolt names)
       - include_dirs: All files from specified directories
     
     Args:
@@ -346,20 +358,22 @@ def load_test_files(test: TestVariant) -> List[Tuple[str, str]]:
     
     Returns:
         List of (filename, contents) tuples ready to add to GodboltProject.
+        For additional_files, filename is the original relative path from YAML
+        (to preserve directory structure like "VA_OPT_polyfill/va_opt.h").
     """
     result = []
     seen_filenames = set()
     
     # Load explicitly listed additional files
-    for filepath in test.additional_files:
-        filename = os.path.basename(filepath)
-        if filename in seen_filenames:
+    # additional_files is List[Tuple[godbolt_name, absolute_path]]
+    for godbolt_name, filepath in test.additional_files:
+        if godbolt_name in seen_filenames:
             continue
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 contents = f.read()
-            result.append((filename, contents))
-            seen_filenames.add(filename)
+            result.append((godbolt_name, contents))
+            seen_filenames.add(godbolt_name)
         except OSError as e:
             print(f"Warning: Could not read file {filepath}: {e}", file=sys.stderr)
     
@@ -1002,12 +1016,10 @@ def main() -> int:
         print(f"Error loading config: {e}", file=sys.stderr)
         return 1
     
-    config_dir = os.path.dirname(os.path.abspath(args.config_file))
-    
     # Parse compilers and tests
     compilers = parse_compilers(config)
     tests = parse_tests(config)
-    resolve_file_paths(tests, config_dir)
+    resolve_file_paths(tests, os.getcwd())
     
     # Apply filters
     if args.compiler:
