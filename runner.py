@@ -987,6 +987,10 @@ def main() -> int:
         help="Filter by test name or variant (can be repeated)"
     )
     parser.add_argument(
+        "--group", "-g", action="append", metavar="GROUP",
+        help="Filter by test group (can be repeated)"
+    )
+    parser.add_argument(
         "--all", "-a", action="store_true",
         help="Run all tests (default: only auto tests)"
     )
@@ -1032,6 +1036,12 @@ def main() -> int:
         tests = [t for t in tests if t.test_name in args.test or t.variant in args.test]
         if not tests:
             print(f"Error: No tests matching: {args.test}", file=sys.stderr)
+            return 1
+    
+    if args.group:
+        tests = [t for t in tests if t.group in args.group]
+        if not tests:
+            print(f"Error: No tests matching groups: {args.group}", file=sys.stderr)
             return 1
     
     # --table implies --all
