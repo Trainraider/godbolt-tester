@@ -691,6 +691,134 @@ def run_test(
         )
 
 
+def run_preprocess_only(
+    test: TestVariant,
+    compiler: CompilerConfig,
+    results_dir: str,
+    language: str = "c",
+    delay: float = 0.5,
+    debug: bool = False,
+) -> TestResult:
+    """
+    Run only preprocessing for a single test with a single compiler.
+    
+    Args:
+        test: The test variant to run (includes any additional files)
+        compiler: The compiler configuration
+        results_dir: Directory to store results
+        language: Programming language (default: "c")
+        delay: Delay between API requests in seconds
+        debug: Save full API responses for debugging
+    
+    Returns a TestResult with preprocessing outcomes and file paths.
+    """
+    # Create output directory for this test/compiler combo
+    safe_compiler_name = compiler.display_name.replace(" ", "_").replace("/", "_")
+    subdir = os.path.join(results_dir, f"{test.test_name}_{safe_compiler_name}")
+    os.makedirs(subdir, exist_ok=True)
+    
+    # Output file paths
+    files = {
+        "preprocessed": os.path.join(subdir, "preprocessed.c"),
+        "preprocess_err": os.path.join(subdir, "preprocess_err.txt"),
+        "result": os.path.join(subdir, "result.json"),
+    }
+    if debug:
+        files["debug_response"] = os.path.join(subdir, "debug_response.json")
+    
+    stderr_log: Dict[str, str] = {"preprocess": "", "compile": "", "run": ""}
+    warnings_detected = False
+    
+    # Read source file
+    try:
+        with open(test.file_name, "r", encoding="utf-8") as f:
+            source = f.read()
+    except OSError as e:
+        return _make_error_result(
+            test, compiler, "preprocessing", files, stderr_log,
+            api_error=True, error_msg=f"Failed to read source: {e}"
+        )
+    
+    # Prepend lines if configured
+    if test.prepend_lines:
+        source = "\n".join(test.prepend_lines) + "\n" + source
+    
+    # Build compiler args
+    extra_flags = list(compiler.extra_flags) if compiler.extra_flags else []
+    compiler_args = " ".join(extra_flags) if extra_flags else ""
+    
+    # Create project and inject macro probe if needed
+    project = GodboltProject(
+        source=source,
+        compiler=compiler.api_name,
+        language=language,
+        compiler_args=compiler_args,
+    )
+    
+    # Add additional files (e.g., headers) from the test config
+    if test.additional_files or test.include_dirs:
+        for filename, contents in load_test_files(test):
+            project.add_file(filename, contents)
+    
+    if test.detect_macro:
+        project.inject_macro_probe(test.detect_macro)
+    
+    # Run preprocessing
+    result = project.preprocess(
+        filter_headers=True,
+        restore_includes=True,
+        trim_empty_lines=True,
+    )
+    
+    # Rate limiting delay
+    time.sleep(delay)
+    
+    if result.is_err():
+        stderr_log["preprocess"] = result.error
+        _write_file(files["preprocess_err"], result.error)
+        return _make_error_result(
+            test, compiler, "preprocessing", files, stderr_log,
+            api_error=True, error_msg=result.error
+        )
+    
+    # Save debug response if requested
+    if debug and project.response:
+        _write_json(files["debug_response"], project.response)
+    
+    # Check for preprocessing errors
+    stderr_log["preprocess"] = project.compiler_stderr
+    warnings_detected = project.has_warnings()
+    has_errors = project.has_errors()
+    
+    if has_errors:
+        _write_file(files["preprocess_err"], project.compiler_stderr)
+    
+    # Get preprocessed output
+    preprocessed = project.preprocessed
+    if not preprocessed or not preprocessed.strip():
+        _write_file(files["preprocess_err"], "No preprocessed output")
+        return _make_error_result(
+            test, compiler, "preprocessing", files, stderr_log,
+            has_warnings=warnings_detected
+        )
+    
+    # Save preprocessed source
+    _write_file(files["preprocessed"], preprocessed)
+    
+    # Extract macro probe value if applicable
+    impl_value = None
+    if test.detect_macro:
+        probe_result = project.get_macro_probe_value(test.detect_macro)
+        if probe_result.is_ok():
+            impl_value = probe_result.value
+    
+    # Preprocessing-only mode: success means no errors during preprocessing
+    return _make_result(
+        test, compiler, "preprocessing", not has_errors, files, stderr_log,
+        impl_value=impl_value, has_warnings=warnings_detected, has_errors=has_errors
+    )
+
+
 def _make_result(
     test: TestVariant,
     compiler: CompilerConfig,
@@ -1010,6 +1138,10 @@ def main() -> int:
         "--language", default="c",
         help="Programming language (default: c)"
     )
+    parser.add_argument(
+        "--preprocess-only", "-P", action="store_true",
+        help="Only run preprocessing and save results (no compilation or execution)"
+    )
     
     args = parser.parse_args()
     
@@ -1107,14 +1239,24 @@ def main() -> int:
                             pbar.update(1)
                             continue
                 
-                result = run_test(
-                    test=test,
-                    compiler=compiler,
-                    results_dir=args.results_dir,
-                    language=args.language,
-                    delay=args.delay,
-                    debug=args.debug,
-                )
+                if args.preprocess_only:
+                    result = run_preprocess_only(
+                        test=test,
+                        compiler=compiler,
+                        results_dir=args.results_dir,
+                        language=args.language,
+                        delay=args.delay,
+                        debug=args.debug,
+                    )
+                else:
+                    result = run_test(
+                        test=test,
+                        compiler=compiler,
+                        results_dir=args.results_dir,
+                        language=args.language,
+                        delay=args.delay,
+                        debug=args.debug,
+                    )
                 results.append(result)
                 
                 # Track auto test results
