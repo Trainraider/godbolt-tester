@@ -186,13 +186,30 @@ class TestVariant:
                 if item not in result:
                     result.append(item)
             return result
+
+        def merge_lists_multi_keys(keys: List[str]) -> List[str]:
+            """Merge list values from multiple equivalent keys (group + variant)."""
+            result: List[str] = []
+
+            for key in keys:
+                for item in group_defaults.get(key, []):
+                    if item not in result:
+                        result.append(item)
+
+            for key in keys:
+                for item in d.get(key, []):
+                    if item not in result:
+                        result.append(item)
+
+            return result
         
         prepend_lines = merge_lists("prepend_lines")
         # additional_files: store as (godbolt_name, path) tuples
         # Initially both are the original relative path; resolve_file_paths updates the absolute path
         additional_files_raw = merge_lists("additional_files")
         additional_files = [(f, f) for f in additional_files_raw]
-        include_dirs = merge_lists("include_dirs")
+        # Support both include_dirs and include_directories for compatibility.
+        include_dirs = merge_lists_multi_keys(["include_dirs", "include_directories"])
         
         return cls(
             test_name=test_name,
@@ -364,18 +381,44 @@ def load_test_files(test: TestVariant) -> List[Tuple[str, str]]:
     result = []
     seen_filenames = set()
     
+    def _resolve_additional_file_path(godbolt_name: str, filepath: str, include_dirs: List[str]) -> Optional[str]:
+        """Resolve an additional file path, searching include_dirs when needed."""
+        # 1) Explicit path as configured (already absolute if resolve_file_paths ran)
+        if os.path.isfile(filepath):
+            return filepath
+
+        # 2) Search include directories for either full relative path or basename
+        base_name = os.path.basename(godbolt_name)
+        for include_dir in include_dirs:
+            candidate_full = os.path.join(include_dir, godbolt_name)
+            if os.path.isfile(candidate_full):
+                return candidate_full
+
+            candidate_base = os.path.join(include_dir, base_name)
+            if os.path.isfile(candidate_base):
+                return candidate_base
+
+        return None
+
     # Load explicitly listed additional files
     # additional_files is List[Tuple[godbolt_name, absolute_path]]
     for godbolt_name, filepath in test.additional_files:
         if godbolt_name in seen_filenames:
             continue
+        resolved_path = _resolve_additional_file_path(godbolt_name, filepath, test.include_dirs)
+        if not resolved_path:
+            print(
+                f"Warning: Could not read file {filepath} (also not found in include directories)",
+                file=sys.stderr,
+            )
+            continue
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(resolved_path, "r", encoding="utf-8") as f:
                 contents = f.read()
             result.append((godbolt_name, contents))
             seen_filenames.add(godbolt_name)
         except OSError as e:
-            print(f"Warning: Could not read file {filepath}: {e}", file=sys.stderr)
+            print(f"Warning: Could not read file {resolved_path}: {e}", file=sys.stderr)
     
     # Load all files from include directories
     for include_dir in test.include_dirs:
